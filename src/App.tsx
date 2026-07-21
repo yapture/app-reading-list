@@ -71,14 +71,14 @@ function ProgressRing({ completed, target }: { completed: number; target: number
   const pct = target > 0 ? Math.min(1, completed / target) : 0;
   return (
     <svg width={size} height={size} style={{ flexShrink: 0 }}>
-      <circle cx={r + stroke} cy={r + stroke} r={r} fill="none" stroke="rgba(166,176,190,.12)" strokeWidth={stroke} />
-      <circle cx={r + stroke} cy={r + stroke} r={r} fill="none" stroke="#F2B960" strokeWidth={stroke}
+      <circle cx={r + stroke} cy={r + stroke} r={r} fill="none" stroke="var(--yap-border-subtle)" strokeWidth={stroke} />
+      <circle cx={r + stroke} cy={r + stroke} r={r} fill="none" stroke="var(--yap-warning)" strokeWidth={stroke}
         strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)}
         transform={`rotate(-90 ${r + stroke} ${r + stroke})`} style={{ transition: 'stroke-dashoffset .5s' }} />
-      <text x={r + stroke} y={r + stroke - 6} textAnchor="middle" fill="#f7f4ec" fontSize="18" fontWeight="700">
+      <text x={r + stroke} y={r + stroke - 6} textAnchor="middle" fill="var(--yap-fg)" fontSize="18" fontWeight="700">
         {completed}/{target}
       </text>
-      <text x={r + stroke} y={r + stroke + 12} textAnchor="middle" fill="#a6b0be" fontSize="11">
+      <text x={r + stroke} y={r + stroke + 12} textAnchor="middle" fill="var(--yap-fg-muted)" fontSize="11">
         finished
       </text>
     </svg>
@@ -170,7 +170,7 @@ export function App() {
       <header style={S.header}>
         <div style={S.headerInner}>
           <h1 style={S.logo}>
-            <span style={{ color: '#F2B960' }}>Reading List</span>
+            <span style={{ color: 'var(--yap-warning)' }}>Reading List</span>
             <span style={S.logoSub}>by Yapture</span>
           </h1>
           <a href="https://yapture.com/market/reading-list" style={S.marketLink}>View on Market &rarr;</a>
@@ -182,13 +182,13 @@ export function App() {
         <div className="rl-goal" style={S.goalSection}>
           <ProgressRing completed={counts.finished} target={goal} />
           <div>
-            <div style={{ fontSize: 15, color: '#a6b0be', marginBottom: 8 }}>Annual reading goal</div>
+            <div style={{ fontSize: 15, color: 'var(--yap-fg-muted)', marginBottom: 8 }}>Annual reading goal</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <label style={{ fontSize: 13, color: '#738091' }}>Target:</label>
+              <label style={{ fontSize: 13, color: 'var(--yap-fg-faint)' }}>Target:</label>
               <input type="number" min={1} max={999} value={goal}
                 onChange={(e) => setGoal(Math.max(1, parseInt(e.target.value) || 1))}
                 style={{ ...S.input, width: 64, padding: '6px 10px', fontSize: 14, textAlign: 'center' }} />
-              <span style={{ fontSize: 13, color: '#738091' }}>books</span>
+              <span style={{ fontSize: 13, color: 'var(--yap-fg-faint)' }}>books</span>
             </div>
           </div>
         </div>
@@ -216,7 +216,7 @@ export function App() {
           </div>
           {books.length > 0 && (
             <button type="button" onClick={exportAsScript}
-              style={{ ...S.exBtn, borderColor: 'rgba(77,107,255,.3)', color: copyFeedback ? '#43D6AD' : '#7B93FF' }}>
+              style={{ ...S.exBtn, borderColor: 'var(--yap-accent-muted)', color: copyFeedback ? 'var(--yap-success)' : 'var(--yap-accent-hover)' }}>
               {copyFeedback ? 'Copied!' : 'Export as Script'}
             </button>
           )}
@@ -230,13 +230,13 @@ export function App() {
           <div className="rl-grid" style={S.grid}>
             {filtered.map((book) => (
               <div key={book.id} style={S.card}
-                onMouseEnter={(e) => { Object.assign(e.currentTarget.style, { background: '#1d2636', borderColor: 'rgba(166,176,190,.28)' }); }}
-                onMouseLeave={(e) => { Object.assign(e.currentTarget.style, { background: '#151c27', borderColor: 'rgba(166,176,190,.18)' }); }}>
+                onMouseEnter={(e) => { Object.assign(e.currentTarget.style, { background: 'var(--yap-bg-elevated)', borderColor: 'var(--yap-border)' }); }}
+                onMouseLeave={(e) => { Object.assign(e.currentTarget.style, { background: 'var(--yap-card-bg)', borderColor: 'var(--yap-border-subtle)' }); }}>
                 <div style={S.cardTop}>
                   <button type="button" onClick={() => cycleStatus(book.id)} style={{
                     ...S.statusChip,
-                    background: book.status === 'finished' ? 'rgba(67,214,173,.15)' : book.status === 'reading' ? 'rgba(77,107,255,.15)' : 'rgba(166,176,190,.1)',
-                    color: book.status === 'finished' ? '#5EEDC4' : book.status === 'reading' ? '#93A8FF' : '#E2E6EC',
+                    background: book.status === 'finished' ? 'var(--yap-success-bg)' : book.status === 'reading' ? 'var(--yap-info-bg)' : 'var(--yap-border-subtle)',
+                    color: book.status === 'finished' ? 'var(--yap-success-fg)' : book.status === 'reading' ? 'var(--yap-info-fg)' : 'var(--yap-fg)',
                   }}>{book.status.replace('-', ' ')}</button>
                   <button type="button" onClick={() => removeBook(book.id)} style={S.removeBtn}>&times;</button>
                 </div>
@@ -252,7 +252,7 @@ export function App() {
                           onChange={(e) => setEditPage(e.target.value)}
                           onBlur={() => updatePages(book.id, parseInt(editPage) || 0)}
                           style={{ ...S.input, width: 72, padding: '4px 8px', fontSize: 13 }} />
-                        <span style={{ fontSize: 12, color: '#738091' }}>/ {book.totalPages} pages</span>
+                        <span style={{ fontSize: 12, color: 'var(--yap-fg-faint)' }}>/ {book.totalPages} pages</span>
                       </form>
                     ) : (
                       <div onClick={() => { setEditingId(book.id); setEditPage(String(book.currentPage ?? 0)); }}
@@ -288,37 +288,37 @@ export function App() {
 }
 
 const S: Record<string, React.CSSProperties> = {
-  root: { minHeight: '100vh', background: '#080b10', color: '#f7f4ec', fontFamily: 'Inter, system-ui, -apple-system, sans-serif', display: 'flex', flexDirection: 'column' },
-  header: { borderBottom: '1px solid rgba(166,176,190,.18)', padding: '16px 0' },
+  root: { minHeight: '100vh', background: '#080b10', color: 'var(--yap-fg)', fontFamily: 'var(--yap-font-sans)', display: 'flex', flexDirection: 'column' },
+  header: { borderBottom: '1px solid var(--yap-border)', padding: '16px 0' },
   headerInner: { maxWidth: 960, margin: '0 auto', padding: '0 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   logo: { fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'baseline', gap: 8 },
-  logoSub: { fontSize: 13, fontWeight: 400, color: '#a6b0be' },
-  marketLink: { fontSize: 14, color: '#4d6bff', textDecoration: 'none', fontWeight: 500 },
+  logoSub: { fontSize: 13, fontWeight: 400, color: 'var(--yap-fg-muted)' },
+  marketLink: { fontSize: 14, color: 'var(--yap-accent)', textDecoration: 'none', fontWeight: 500 },
   main: { flex: 1, maxWidth: 960, margin: '0 auto', padding: '40px 24px', width: '100%', boxSizing: 'border-box' as const },
-  goalSection: { display: 'flex', alignItems: 'center', gap: 24, padding: 20, borderRadius: 14, border: '1px solid rgba(166,176,190,.18)', background: '#151c27', marginBottom: 32 },
+  goalSection: { display: 'flex', alignItems: 'center', gap: 24, padding: 20, borderRadius: 14, border: '1px solid var(--yap-border)', background: 'var(--yap-card-bg)', marginBottom: 32 },
   form: { display: 'flex', gap: 12, marginBottom: 16 },
-  input: { flex: 1, padding: '12px 16px', borderRadius: 10, border: '1px solid rgba(166,176,190,.18)', background: '#0f141c', color: '#f7f4ec', fontSize: 15, fontFamily: '"JetBrains Mono", monospace', outline: 'none' },
-  addBtn: { padding: '12px 24px', borderRadius: 10, border: 'none', background: '#4d6bff', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' },
+  input: { flex: 1, padding: '12px 16px', borderRadius: 10, border: '1px solid var(--yap-input-border)', background: 'var(--yap-input-bg)', color: 'var(--yap-fg)', fontSize: 15, fontFamily: 'var(--yap-font-mono)', outline: 'none' },
+  addBtn: { padding: '12px 24px', borderRadius: 10, border: 'none', background: 'var(--yap-accent)', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' },
   examples: { display: 'flex', flexWrap: 'wrap' as const, gap: 8, marginBottom: 32 },
-  exBtn: { padding: '6px 14px', borderRadius: 999, border: '1px solid rgba(166,176,190,.14)', background: 'rgba(255,255,255,.04)', color: '#a6b0be', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' },
+  exBtn: { padding: '6px 14px', borderRadius: 999, border: '1px solid var(--yap-border-subtle)', background: 'rgba(255,255,255,.04)', color: 'var(--yap-fg-muted)', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' },
   filters: { display: 'flex', gap: 8, marginBottom: 0 },
-  filterBtn: { padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(166,176,190,.14)', background: 'transparent', color: '#a6b0be', fontSize: 14, fontWeight: 500, cursor: 'pointer', textTransform: 'capitalize' as const, fontFamily: 'inherit' },
-  filterBtnActive: { background: 'rgba(77,107,255,.12)', color: '#7B93FF', borderColor: 'rgba(77,107,255,.3)' },
-  empty: { textAlign: 'center' as const, color: '#738091', fontSize: 15, padding: '60px 0' },
+  filterBtn: { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--yap-border-subtle)', background: 'transparent', color: 'var(--yap-fg-muted)', fontSize: 14, fontWeight: 500, cursor: 'pointer', textTransform: 'capitalize' as const, fontFamily: 'inherit' },
+  filterBtnActive: { background: 'var(--yap-accent-muted)', color: 'var(--yap-accent-hover)', borderColor: 'var(--yap-accent)' },
+  empty: { textAlign: 'center' as const, color: 'var(--yap-fg-faint)', fontSize: 15, padding: '60px 0' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 },
-  card: { padding: 20, borderRadius: 14, border: '1px solid rgba(166,176,190,.18)', background: '#151c27', transition: 'background .15s, border-color .15s' },
+  card: { padding: 20, borderRadius: 14, border: '1px solid var(--yap-border-subtle)', background: 'var(--yap-card-bg)', transition: 'background .15s, border-color .15s' },
   cardTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  statusChip: { padding: '4px 10px', borderRadius: 999, border: 'none', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '.06em', cursor: 'pointer', fontFamily: '"JetBrains Mono", monospace' },
-  removeBtn: { border: 'none', background: 'none', color: '#738091', fontSize: 18, cursor: 'pointer', padding: '0 4px' },
+  statusChip: { padding: '4px 10px', borderRadius: 999, border: 'none', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '.06em', cursor: 'pointer', fontFamily: 'var(--yap-font-mono)' },
+  removeBtn: { border: 'none', background: 'none', color: 'var(--yap-fg-faint)', fontSize: 18, cursor: 'pointer', padding: '0 4px' },
   cardTitle: { fontSize: 17, fontWeight: 600, margin: '0 0 12px', lineHeight: 1.35 },
   progress: { marginBottom: 12 },
-  progressBar: { height: 6, borderRadius: 3, background: 'rgba(166,176,190,.15)', overflow: 'hidden' as const, marginBottom: 6 },
-  progressFill: { height: '100%', borderRadius: 3, background: '#F2B960', transition: 'width .3s' },
-  progressLabel: { fontSize: 13, color: '#a6b0be' },
+  progressBar: { height: 6, borderRadius: 3, background: 'var(--yap-border-subtle)', overflow: 'hidden' as const, marginBottom: 6 },
+  progressFill: { height: '100%', borderRadius: 3, background: 'var(--yap-warning)', transition: 'width .3s' },
+  progressLabel: { fontSize: 13, color: 'var(--yap-fg-muted)' },
   tags: { display: 'flex', flexWrap: 'wrap' as const, gap: 6 },
-  tag: { padding: '3px 8px', borderRadius: 6, background: 'rgba(166,176,190,.1)', color: '#a6b0be', fontSize: 12, fontWeight: 500 },
-  tagWorkspace: { background: 'rgba(5,150,105,.12)', color: '#34d399' },
-  tagPriority: { background: 'rgba(234,88,12,.12)', color: '#fb923c' },
-  footer: { borderTop: '1px solid rgba(166,176,190,.18)', padding: '20px 24px', display: 'flex', justifyContent: 'center', gap: 12, fontSize: 13, color: '#738091' },
-  footerLink: { color: '#4d6bff', textDecoration: 'none' },
+  tag: { padding: '3px 8px', borderRadius: 6, background: 'var(--yap-border-subtle)', color: 'var(--yap-fg-muted)', fontSize: 12, fontWeight: 500 },
+  tagWorkspace: { background: 'var(--yap-success-bg)', color: 'var(--yap-success-fg)' },
+  tagPriority: { background: 'var(--yap-warning-bg)', color: 'var(--yap-warning-fg)' },
+  footer: { borderTop: '1px solid var(--yap-border)', padding: '20px 24px', display: 'flex', justifyContent: 'center', gap: 12, fontSize: 13, color: 'var(--yap-fg-faint)' },
+  footerLink: { color: 'var(--yap-accent)', textDecoration: 'none' },
 };
