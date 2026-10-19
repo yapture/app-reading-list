@@ -15,13 +15,67 @@ interface Book {
 const STORAGE_KEY = 'yapture.app-reading-list.books.v1';
 const GOAL_KEY = 'yapture.app-reading-list.goal.v1';
 
-function loadBooks(): Book[] {
-  try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; }
+function isBook(value: unknown): value is Book {
+  if (!value || typeof value !== 'object') return false;
+  const book = value as Record<string, unknown>;
+  const nullableString = (field: string) => book[field] === null || typeof book[field] === 'string';
+  const nullablePage = (field: string) => book[field] === null
+    || (typeof book[field] === 'number' && Number.isFinite(book[field]) && (book[field] as number) >= 0);
+  return typeof book.id === 'string'
+    && typeof book.title === 'string'
+    && typeof book.addedAt === 'string'
+    && Array.isArray(book.tags)
+    && book.tags.every((tag: unknown) => typeof tag === 'string')
+    && nullableString('priority')
+    && nullableString('workspace')
+    && nullablePage('totalPages')
+    && nullablePage('currentPage')
+    && (book.status === 'to-read' || book.status === 'reading' || book.status === 'finished');
+}
+
+export function loadBooks(): Book[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isBook) : [];
+  }
   catch { return []; }
 }
-function saveBooks(books: Book[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(books)); }
-function loadGoal(): number { return parseInt(localStorage.getItem(GOAL_KEY) || '12', 10) || 12; }
-function saveGoal(n: number) { localStorage.setItem(GOAL_KEY, String(n)); }
+export function saveBooks(books: Book[]): boolean {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw !== null) {
+      const prior: unknown = JSON.parse(raw);
+      if (!Array.isArray(prior) || !prior.every(isBook)) return false;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
+    return true;
+  }
+  catch { return false; }
+}
+export function loadGoal(): number {
+  try {
+    const raw = localStorage.getItem(GOAL_KEY);
+    if (raw === null) return 12;
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999 ? parsed : 12;
+  }
+  catch { return 12; }
+}
+export function saveGoal(n: number): boolean {
+  if (!Number.isInteger(n) || n < 1 || n > 999) return false;
+  try { localStorage.setItem(GOAL_KEY, String(n)); return true; }
+  catch { return false; }
+}
+
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (!navigator.clipboard?.writeText) return false;
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { return false; }
+}
 
 function parseScript(text: string): Partial<Book> {
   const tags: string[] = [];
@@ -100,14 +154,17 @@ export function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPage, setEditPage] = useState('');
   const [goal, setGoal] = useState(loadGoal);
+  const [storageWarning, setStorageWarning] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const [status, setStatus] = useState('');
   const flip = useRef(false);
   const pendingFocus = useRef<{ selector: string | null; fallbacks: string[] } | null>(null);
 
-  useEffect(() => { saveGoal(goal); }, [goal]);
-
-  const persist = useCallback((next: Book[]) => { setBooks(next); saveBooks(next); }, []);
+  const persist = useCallback((next: Book[]) => {
+    setBooks(next);
+    if (!saveBooks(next)) setStorageWarning(true);
+  }, []);
 
   /* Polite live-region message; alternate a trailing nbsp so repeats are re-announced. */
   const announce = useCallback((msg: string) => {
@@ -187,9 +244,18 @@ export function App() {
     announce(`${cur.title}: ${cp} of ${cur.totalPages ?? cp} pages read`);
   }, [books, persist, announce, filter, visible]);
 
-  const exportAsScript = useCallback(() => {
+  const exportAsScript = useCallback(async () => {
+    setCopyError(false);
     const text = books.map(bookToScript).join('\n');
-    navigator.clipboard.writeText(text).then(() => { setCopyFeedback(true); announce('Copied'); setTimeout(() => setCopyFeedback(false), 2000); });
+    if (!(await copyText(text))) {
+      setCopyFeedback(false);
+      setCopyError(true);
+      announce('Could not copy. Check clipboard permissions.');
+      return;
+    }
+    setCopyFeedback(true);
+    announce('Copied');
+    setTimeout(() => setCopyFeedback(false), 2000);
   }, [books, announce]);
 
   const handleSubmit = (e: FormEvent) => { e.preventDefault(); addBook(input); };
@@ -228,6 +294,9 @@ export function App() {
       </header>
 
       <main style={S.main}>
+        {storageWarning && <p role="alert" style={{ padding: 12, border: '1px solid var(--yap-warning)', borderRadius: 8, background: 'var(--yap-warning-bg)', color: 'var(--yap-fg)' }}>
+          Changes could not be saved. They may disappear when you reload this page.
+        </p>}
         {/* Annual reading goal */}
         <div className="rl-goal" style={S.goalSection}>
           <ProgressRing completed={counts.finished} target={goal} />
@@ -236,7 +305,11 @@ export function App() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <label htmlFor="goal-input" style={{ fontSize: 13, color: 'var(--yap-fg-muted)' }}>Target:</label>
               <input id="goal-input" type="number" min={1} max={999} value={goal}
-                onChange={(e) => setGoal(Math.max(1, parseInt(e.target.value) || 1))}
+                onChange={(e) => {
+                  const next = Math.min(999, Math.max(1, parseInt(e.target.value, 10) || 1));
+                  setGoal(next);
+                  if (!saveGoal(next)) setStorageWarning(true);
+                }}
                 style={{ ...S.input, width: 64, padding: '6px 10px', fontSize: 14, textAlign: 'center' }} />
               <span style={{ fontSize: 13, color: 'var(--yap-fg-muted)' }}>books</span>
             </div>
@@ -272,6 +345,7 @@ export function App() {
             </button>
           )}
         </div>
+        {copyError && <p role="alert">Could not copy. Check clipboard permissions and try again.</p>}
 
         {filtered.length === 0 ? (
           <div style={S.empty}>
