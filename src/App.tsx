@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-
-interface Book {
-  id: string;
-  title: string;
-  tags: string[];
-  priority: string | null;
-  workspace: string | null;
-  totalPages: number | null;
-  currentPage: number | null;
-  status: 'to-read' | 'reading' | 'finished';
-  addedAt: string;
-}
+import { createBackup, MAX_BACKUP_BYTES, parseBackup, type Book } from './backup';
 
 const STORAGE_KEY = 'yapture.app-reading-list.books.v1';
 const GOAL_KEY = 'yapture.app-reading-list.goal.v1';
@@ -157,7 +146,9 @@ export function App() {
   const [storageWarning, setStorageWarning] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [copyError, setCopyError] = useState(false);
+  const [backupFeedback, setBackupFeedback] = useState('');
   const [status, setStatus] = useState('');
+  const backupInput = useRef<HTMLInputElement>(null);
   const flip = useRef(false);
   const pendingFocus = useRef<{ selector: string | null; fallbacks: string[] } | null>(null);
 
@@ -177,8 +168,12 @@ export function App() {
     const p = pendingFocus.current;
     if (!p) return;
     pendingFocus.current = null;
-    const el = (p.selector && document.querySelector<HTMLElement>(p.selector))
-      || p.fallbacks.map((id) => document.getElementById(id)).find(Boolean);
+    let target: HTMLElement | null = null;
+    if (p.selector) {
+      try { target = document.querySelector<HTMLElement>(p.selector); }
+      catch { /* A restored record ID may not be valid CSS selector syntax. */ }
+    }
+    const el = target || p.fallbacks.map((id) => document.getElementById(id)).find(Boolean);
     el?.focus();
   }, [books]);
 
@@ -187,7 +182,7 @@ export function App() {
   const neighbourSelector = (id: string, attr: string) => {
     const i = visible.findIndex((b) => b.id === id);
     const n = visible[i + 1] ?? visible[i - 1];
-    return n ? `[${attr}="${n.id}"]` : null;
+    return n ? `[${attr}="${CSS.escape(n.id)}"]` : null;
   };
 
   const addBook = useCallback((text: string) => {
@@ -213,7 +208,7 @@ export function App() {
     if (!cur) return;
     const next = order[(order.indexOf(cur.status) + 1) % 3];
     pendingFocus.current = {
-      selector: filter !== 'all' && next !== filter ? neighbourSelector(id, 'data-status-id') : `[data-status-id="${id}"]`,
+      selector: filter !== 'all' && next !== filter ? neighbourSelector(id, 'data-status-id') : `[data-status-id="${CSS.escape(id)}"]`,
       fallbacks: ['book-input'],
     };
     persist(books.map((b) => b.id !== id ? b : { ...b, status: next }));
@@ -235,7 +230,7 @@ export function App() {
     const next: Book['status'] = cur.totalPages && cp >= cur.totalPages ? 'finished' : cp > 0 ? 'reading' : 'to-read';
     if (restoreFocus) {
       pendingFocus.current = {
-        selector: filter !== 'all' && next !== filter ? neighbourSelector(id, 'data-status-id') : `[data-progress-id="${id}"]`,
+        selector: filter !== 'all' && next !== filter ? neighbourSelector(id, 'data-status-id') : `[data-progress-id="${CSS.escape(id)}"]`,
         fallbacks: ['book-input'],
       };
     }
@@ -257,6 +252,60 @@ export function App() {
     announce('Copied');
     setTimeout(() => setCopyFeedback(false), 2000);
   }, [books, announce]);
+
+  const downloadBackup = useCallback(() => {
+    try {
+      const blob = new Blob([createBackup(books, goal)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `reading-list-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      try { link.click(); }
+      finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60_000); }
+      setBackupFeedback('Backup download started. Keep the JSON file somewhere safe.');
+      announce('Backup download started');
+    } catch {
+      setBackupFeedback('Could not create backup.');
+      announce('Could not create backup');
+    }
+  }, [books, goal, announce]);
+
+  const restoreBackup = useCallback(async (file: File | undefined) => {
+    if (!file) return;
+    setBackupFeedback('');
+    try {
+      if (file.size > MAX_BACKUP_BYTES) throw new Error('Backup exceeds 1 MiB');
+      const backup = parseBackup(await file.text());
+      if (books.length || loadBooks().length || goal !== loadGoal()) {
+        throw new Error('Restore requires an empty, unchanged reading list. Reload before restoring.');
+      }
+      const booksBeforeConfirm = localStorage.getItem(STORAGE_KEY);
+      const goalBeforeConfirm = localStorage.getItem(GOAL_KEY);
+      if (!window.confirm(`Restore ${backup.books.length} books and annual goal ${backup.goal}?`)) return;
+      if (localStorage.getItem(STORAGE_KEY) !== booksBeforeConfirm || loadBooks().length
+        || localStorage.getItem(GOAL_KEY) !== goalBeforeConfirm) {
+        throw new Error('Reading list or goal changed in another tab. Reload before restoring.');
+      }
+      // saveBooks refuses malformed existing storage; do not replace data hidden by loadBooks.
+      if (!saveBooks(backup.books)) throw new Error('Could not save restored books');
+      if (!saveGoal(backup.goal)) {
+        setBooks(backup.books);
+        setStorageWarning(true);
+        throw new Error('Books restored, but annual goal could not be saved');
+      }
+      setBooks(backup.books);
+      setGoal(backup.goal);
+      setBackupFeedback(`Restored ${backup.books.length} books and annual goal ${backup.goal}.`);
+      announce(`Restored ${backup.books.length} books`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not restore backup';
+      setBackupFeedback(message);
+      announce(message);
+    } finally {
+      if (backupInput.current) backupInput.current.value = '';
+    }
+  }, [books, goal, announce]);
 
   const handleSubmit = (e: FormEvent) => { e.preventDefault(); addBook(input); };
 
@@ -338,14 +387,21 @@ export function App() {
               </button>
             ))}
           </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" onClick={downloadBackup} style={S.exBtn}>Download backup</button>
+          <input ref={backupInput} type="file" accept="application/json,.json" className="sr-only"
+            aria-label="Choose Reading List backup" onChange={(e) => { void restoreBackup(e.target.files?.[0]); }} />
+          <button type="button" onClick={() => backupInput.current?.click()} style={S.exBtn}>Restore backup</button>
           {books.length > 0 && (
             <button type="button" onClick={exportAsScript}
               style={{ ...S.exBtn, borderColor: 'var(--yap-accent-muted)', color: copyFeedback ? 'var(--yap-success)' : 'var(--yap-accent-hover)' }}>
               {copyFeedback ? 'Copied!' : 'Export as Script'}
             </button>
           )}
+          </div>
         </div>
         {copyError && <p role="alert">Could not copy. Check clipboard permissions and try again.</p>}
+        {backupFeedback && <p role="alert">{backupFeedback}</p>}
 
         {filtered.length === 0 ? (
           <div style={S.empty}>
