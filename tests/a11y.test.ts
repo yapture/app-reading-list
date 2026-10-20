@@ -47,7 +47,7 @@ describe('a11y (source-level)', () => {
   });
 
   test('progress control is a real <button> (not a clickable div)', () => {
-    expect(/<button type="button" onClick=\{\(\) => \{ setEditingId[\s\S]*?aria-label=\{`\$\{book\.currentPage \?\? 0\} \/ \$\{book\.totalPages\} pages, update pages read`\}/.test(src)).toBe(true);
+    expect(/<button type="button" disabled=\{conflict \|\| saving\} onClick=\{\(\) => \{ setEditingId[\s\S]*?aria-label=\{`\$\{book\.currentPage \?\? 0\} \/ \$\{book\.totalPages\} pages, update pages read`\}/.test(src)).toBe(true);
     expect(/<div[^>]*onClick/.test(src)).toBe(false);
   });
 
@@ -61,7 +61,7 @@ describe('a11y (source-level)', () => {
     expect(src.includes('<h2 style={{ ...S.cardTitle')).toBe(true);
   });
   test("a blur never pulls focus back (only Enter/submit restores focus)", () => {
-    expect(/onBlur=\{\(\) => updatePages\(book\.id, parseInt\(editPage\) \|\| 0\)\}/.test(src)).toBe(true);
+    expect(/onBlur=\{\(\) => \{ void updatePages\(book\.id, parseInt\(editPage\) \|\| 0\); \}\}/.test(src)).toBe(true);
     expect(/updatePages\(book\.id, parseInt\(editPage\) \|\| 0, true\)/.test(src)).toBe(true);
     expect(/if \(restoreFocus\) \{\n\s+pendingFocus\.current/.test(src)).toBe(true);
   });

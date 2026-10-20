@@ -1,37 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-
-interface Book {
-  id: string;
-  title: string;
-  tags: string[];
-  priority: string | null;
-  workspace: string | null;
-  totalPages: number | null;
-  currentPage: number | null;
-  status: 'to-read' | 'reading' | 'finished';
-  addedAt: string;
-}
+import { BoardStore } from './board-store';
+import { createBackup, isBook, MAX_BACKUP_BYTES, parseBackup, type Book } from './backup';
 
 const STORAGE_KEY = 'yapture.app-reading-list.books.v1';
 const GOAL_KEY = 'yapture.app-reading-list.goal.v1';
-
-function isBook(value: unknown): value is Book {
-  if (!value || typeof value !== 'object') return false;
-  const book = value as Record<string, unknown>;
-  const nullableString = (field: string) => book[field] === null || typeof book[field] === 'string';
-  const nullablePage = (field: string) => book[field] === null
-    || (typeof book[field] === 'number' && Number.isFinite(book[field]) && (book[field] as number) >= 0);
-  return typeof book.id === 'string'
-    && typeof book.title === 'string'
-    && typeof book.addedAt === 'string'
-    && Array.isArray(book.tags)
-    && book.tags.every((tag: unknown) => typeof tag === 'string')
-    && nullableString('priority')
-    && nullableString('workspace')
-    && nullablePage('totalPages')
-    && nullablePage('currentPage')
-    && (book.status === 'to-read' || book.status === 'reading' || book.status === 'finished');
-}
 
 export function loadBooks(): Book[] {
   try {
@@ -148,23 +120,99 @@ const EXAMPLES = [
 type Filter = 'all' | 'to-read' | 'reading' | 'finished';
 
 export function App() {
-  const [books, setBooks] = useState<Book[]>(loadBooks);
+  const [books, setBooks] = useState<Book[]>([]);
   const [input, setInput] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPage, setEditPage] = useState('');
-  const [goal, setGoal] = useState(loadGoal);
+  const [goal, setGoal] = useState(12);
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const storeRef = useRef<BoardStore | null>(null);
+  const revisionRef = useRef<number | null>(null);
+  const boardRef = useRef<{ books: Book[]; goal: number }>({ books: [], goal: 12 });
+  const savingRef = useRef(false);
+  const conflictRef = useRef(false);
+  const legacyWriteRef = useRef(false);
   const [storageWarning, setStorageWarning] = useState(false);
+  const [recoveryFeedback, setRecoveryFeedback] = useState('');
+  const [backupFeedback, setBackupFeedback] = useState('');
+  const backupInput = useRef<HTMLInputElement>(null);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [status, setStatus] = useState('');
   const flip = useRef(false);
   const pendingFocus = useRef<{ selector: string | null; fallbacks: string[] } | null>(null);
 
-  const persist = useCallback((next: Book[]) => {
-    setBooks(next);
-    if (!saveBooks(next)) setStorageWarning(true);
+  useEffect(() => {
+    let cancelled = false;
+    let opened: BoardStore | null = null;
+    let opening: ReturnType<typeof BoardStore.open>;
+    try { opening = BoardStore.open(indexedDB, () => localStorage); }
+    catch { setLoadError(true); return; }
+    void opening.then(({ store, board, legacyChanged }) => {
+      if (cancelled) { store.close(); return; }
+      opened = store;
+      storeRef.current = store;
+      revisionRef.current = board.revision;
+      boardRef.current = { books: board.books, goal: board.goal };
+      setBooks(board.books);
+      setGoal(board.goal);
+      if (legacyChanged) { legacyWriteRef.current = true; setStorageWarning(true); }
+      setReady(true);
+    }).catch(() => { if (!cancelled) setLoadError(true); });
+    return () => {
+      cancelled = true;
+      opened?.close();
+      if (storeRef.current === opened) storeRef.current = null;
+    };
   }, []);
+
+  useEffect(() => {
+    const onLegacyWrite = (event: StorageEvent) => {
+      if (event.key === null || event.key === STORAGE_KEY || event.key === GOAL_KEY) {
+        legacyWriteRef.current = true;
+        setStorageWarning(true);
+      }
+    };
+    window.addEventListener('storage', onLegacyWrite);
+    return () => window.removeEventListener('storage', onLegacyWrite);
+  }, []);
+
+  const persist = useCallback(async (nextBooks: Book[], nextGoal = goal): Promise<boolean> => {
+    if (conflictRef.current || savingRef.current || !storeRef.current || revisionRef.current === null) return false;
+    if (legacyWriteRef.current) {
+      boardRef.current = { books: nextBooks, goal: nextGoal };
+      conflictRef.current = true;
+      setBooks(nextBooks);
+      setGoal(nextGoal);
+      setConflict(true);
+      setStorageWarning(true);
+      return false;
+    }
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const result = await storeRef.current.commit(revisionRef.current, nextBooks, nextGoal);
+      if (result.state === 'saved') {
+        revisionRef.current = result.revision;
+        boardRef.current = { books: nextBooks, goal: nextGoal };
+        setBooks(nextBooks);
+        setGoal(nextGoal);
+        return true;
+      }
+    } catch { /* Keep the unsaved collection available for export. */ }
+    finally { savingRef.current = false; setSaving(false); }
+    boardRef.current = { books: nextBooks, goal: nextGoal };
+    conflictRef.current = true;
+    setBooks(nextBooks);
+    setGoal(nextGoal);
+    setConflict(true);
+    setStorageWarning(true);
+    return false;
+  }, [goal]);
 
   /* Polite live-region message; alternate a trailing nbsp so repeats are re-announced. */
   const announce = useCallback((msg: string) => {
@@ -190,7 +238,7 @@ export function App() {
     return n ? `[${attr}="${n.id}"]` : null;
   };
 
-  const addBook = useCallback((text: string) => {
+  const addBook = useCallback(async (text: string) => {
     if (!text.trim()) return;
     const parsed = parseScript(text);
     const status: Book['status'] =
@@ -202,12 +250,12 @@ export function App() {
       totalPages: parsed.totalPages ?? null, currentPage: parsed.currentPage ?? null,
       status, addedAt: new Date().toISOString(),
     };
-    persist([book, ...books]);
+    if (!(await persist([book, ...books]))) return;
     setInput('');
     announce(`Added ${book.title}`);
   }, [books, persist, announce]);
 
-  const cycleStatus = useCallback((id: string) => {
+  const cycleStatus = useCallback(async (id: string) => {
     const order: Book['status'][] = ['to-read', 'reading', 'finished'];
     const cur = books.find((b) => b.id === id);
     if (!cur) return;
@@ -216,19 +264,19 @@ export function App() {
       selector: filter !== 'all' && next !== filter ? neighbourSelector(id, 'data-status-id') : `[data-status-id="${id}"]`,
       fallbacks: ['book-input'],
     };
-    persist(books.map((b) => b.id !== id ? b : { ...b, status: next }));
+    if (!(await persist(books.map((b) => b.id !== id ? b : { ...b, status: next })))) return;
     announce(`${cur.title}: ${next.replace('-', ' ')}`);
   }, [books, persist, announce, filter, visible]);
 
-  const removeBook = useCallback((id: string) => {
+  const removeBook = useCallback(async (id: string) => {
     const gone = books.find((b) => b.id === id);
     pendingFocus.current = { selector: neighbourSelector(id, 'data-remove-id'), fallbacks: ['book-input'] };
-    persist(books.filter((b) => b.id !== id));
+    if (!(await persist(books.filter((b) => b.id !== id)))) return;
     if (gone) announce(`Removed ${gone.title}`);
   }, [books, persist, announce, visible]);
 
   // restoreFocus only on submit (Enter): a blur means the user is already moving focus elsewhere.
-  const updatePages = useCallback((id: string, pages: number, restoreFocus = false) => {
+  const updatePages = useCallback(async (id: string, pages: number, restoreFocus = false) => {
     const cur = books.find((b) => b.id === id);
     if (!cur) { setEditingId(null); return; }
     const cp = Math.max(0, Math.min(pages, cur.totalPages ?? Infinity));
@@ -239,7 +287,7 @@ export function App() {
         fallbacks: ['book-input'],
       };
     }
-    persist(books.map((b) => b.id !== id ? b : { ...b, currentPage: cp, status: next }));
+    if (!(await persist(books.map((b) => b.id !== id ? b : { ...b, currentPage: cp, status: next })))) return;
     setEditingId(null);
     announce(`${cur.title}: ${cp} of ${cur.totalPages ?? cp} pages read`);
   }, [books, persist, announce, filter, visible]);
@@ -258,7 +306,95 @@ export function App() {
     setTimeout(() => setCopyFeedback(false), 2000);
   }, [books, announce]);
 
-  const handleSubmit = (e: FormEvent) => { e.preventDefault(); addBook(input); };
+  const downloadBackup = useCallback(() => {
+    try {
+      const url = URL.createObjectURL(new Blob([createBackup(books, goal)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `reading-list-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      try { link.click(); }
+      finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60_000); }
+      setBackupFeedback('Backup download started. Keep the JSON file somewhere safe.');
+      announce('Backup download started');
+    } catch {
+      setBackupFeedback('Could not create backup.');
+      announce('Could not create backup');
+    }
+  }, [books, goal, announce]);
+
+  const restoreBackup = useCallback(async (file: File | undefined) => {
+    if (!file) return;
+    setBackupFeedback('');
+    try {
+      if (file.size > MAX_BACKUP_BYTES) throw new Error('Backup exceeds 1 MiB');
+      const backup = parseBackup(await file.text());
+      const before = boardRef.current;
+      const revision = revisionRef.current;
+      if (!storeRef.current || revision === null || savingRef.current || conflictRef.current || legacyWriteRef.current || before.books.length !== 0) {
+        throw new Error('Restore requires an empty, available reading list. Download a backup of this list first.');
+      }
+      if (!window.confirm(`Restore ${backup.books.length} books and annual goal ${backup.goal}?`)) return;
+      if (savingRef.current || conflictRef.current || legacyWriteRef.current || revisionRef.current !== revision || boardRef.current !== before) {
+        throw new Error('Reading list changed while restoring. Reload before trying again.');
+      }
+      if (!(await persist(backup.books, backup.goal))) {
+        throw new Error('Restore was not saved. Download the unsaved JSON before reloading.');
+      }
+      setBackupFeedback(`Restored ${backup.books.length} books and annual goal ${backup.goal}.`);
+      announce(`Restored ${backup.books.length} books`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not restore backup';
+      setBackupFeedback(message);
+      announce(message);
+    } finally {
+      if (backupInput.current) backupInput.current.value = '';
+    }
+  }, [persist, announce]);
+
+  const downloadRecovery = useCallback(() => {
+    try {
+      const data = JSON.stringify({
+        app: 'yapture-reading-list', schemaVersion: 1,
+        exportedAt: new Date().toISOString(), books, goal,
+      }, null, 2);
+      const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `reading-list-unsaved-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      try { link.click(); }
+      finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60_000); }
+      setRecoveryFeedback('Unsaved Reading List JSON download started. Keep it before reloading.');
+      announce('Unsaved Reading List download started');
+    } catch {
+      setRecoveryFeedback('Could not download unsaved data. Keep this tab open.');
+      announce('Could not download unsaved data');
+    }
+  }, [books, goal, announce]);
+
+  const downloadLegacyRecovery = () => {
+    try {
+      const data = JSON.stringify({
+        app: 'yapture-reading-list', schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        legacyBooksRaw: localStorage.getItem(STORAGE_KEY),
+        legacyGoalRaw: localStorage.getItem(GOAL_KEY),
+      }, null, 2);
+      const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `reading-list-legacy-recovery-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      try { link.click(); }
+      finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60_000); }
+      setRecoveryFeedback('Original browser data download started. Keep it before changing this browser.');
+    } catch {
+      setRecoveryFeedback('Browser storage could not be read. Keep this tab and browser profile intact.');
+    }
+  };
+
+  const handleSubmit = (e: FormEvent) => { e.preventDefault(); void addBook(input); };
 
   const filtered = visible;
   const counts = {
@@ -267,6 +403,13 @@ export function App() {
     reading: books.filter((b) => b.status === 'reading').length,
     finished: books.filter((b) => b.status === 'finished').length,
   };
+
+  if (loadError) return <main role="alert">
+    <p>Reading List storage could not be opened. Your older browser data was left untouched. Close older tabs and reload after saving a recovery copy.</p>
+    <button type="button" onClick={downloadLegacyRecovery}>Download original browser data</button>
+    {recoveryFeedback && <p role="status">{recoveryFeedback}</p>}
+  </main>;
+  if (!ready) return <main role="status">Loading Reading List…</main>;
 
   return (
     <div style={S.root}>
@@ -295,8 +438,13 @@ export function App() {
 
       <main style={S.main}>
         {storageWarning && <p role="alert" style={{ padding: 12, border: '1px solid var(--yap-warning)', borderRadius: 8, background: 'var(--yap-warning-bg)', color: 'var(--yap-fg)' }}>
-          Changes could not be saved. They may disappear when you reload this page.
+          {conflict ? 'Another tab changed this list or storage failed. This tab holds unsaved data. Download its JSON before reloading to see the saved version.' : 'Older browser storage changed or cannot be read. This tab is read-only. Download the current backup and, if available, the original browser data before resolving the copies.'}
         </p>}
+        {storageWarning && <button type="button" onClick={downloadLegacyRecovery} style={S.exBtn}>Download original browser data</button>}
+        {conflict && <div>
+          <button type="button" onClick={downloadRecovery} style={S.exBtn}>Download unsaved JSON</button>
+        </div>}
+        {storageWarning && recoveryFeedback && <p role="status">{recoveryFeedback}</p>}
         {/* Annual reading goal */}
         <div className="rl-goal" style={S.goalSection}>
           <ProgressRing completed={counts.finished} target={goal} />
@@ -304,11 +452,10 @@ export function App() {
             <div style={{ fontSize: 15, color: 'var(--yap-fg-muted)', marginBottom: 8 }}>Annual reading goal</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <label htmlFor="goal-input" style={{ fontSize: 13, color: 'var(--yap-fg-muted)' }}>Target:</label>
-              <input id="goal-input" type="number" min={1} max={999} value={goal}
+              <input id="goal-input" type="number" min={1} max={999} value={goal} disabled={conflict || saving}
                 onChange={(e) => {
                   const next = Math.min(999, Math.max(1, parseInt(e.target.value, 10) || 1));
-                  setGoal(next);
-                  if (!saveGoal(next)) setStorageWarning(true);
+                  void persist(books, next);
                 }}
                 style={{ ...S.input, width: 64, padding: '6px 10px', fontSize: 14, textAlign: 'center' }} />
               <span style={{ fontSize: 13, color: 'var(--yap-fg-muted)' }}>books</span>
@@ -320,12 +467,12 @@ export function App() {
           <label htmlFor="book-input" className="sr-only">Add a book</label>
           <input id="book-input" type="text" value={input} onChange={(e) => setInput(e.target.value)}
             placeholder="Add a book — try: Title #@genre #!priority #*{pages:300,current:50}" style={S.input} />
-          <button type="submit" disabled={!input.trim()} style={S.addBtn}>Add</button>
+          <button type="submit" disabled={conflict || saving || !input.trim()} style={S.addBtn}>Add</button>
         </form>
 
         <div className="rl-examples" style={S.examples}>
           {EXAMPLES.map((ex) => (
-            <button key={ex} type="button" onClick={() => addBook(ex)} style={S.exBtn}>+ {ex.split('#')[0].trim()}</button>
+            <button key={ex} type="button" disabled={conflict || saving} onClick={() => { void addBook(ex); }} style={S.exBtn}>+ {ex.split('#')[0].trim()}</button>
           ))}
         </div>
 
@@ -338,14 +485,21 @@ export function App() {
               </button>
             ))}
           </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" onClick={downloadBackup} style={S.exBtn}>Download backup</button>
+          <input ref={backupInput} type="file" accept="application/json,.json" className="sr-only"
+            aria-label="Choose Reading List backup" onChange={(e) => { void restoreBackup(e.target.files?.[0]); }} />
+          <button type="button" disabled={conflict || saving} onClick={() => backupInput.current?.click()} style={S.exBtn}>Restore backup</button>
           {books.length > 0 && (
             <button type="button" onClick={exportAsScript}
               style={{ ...S.exBtn, borderColor: 'var(--yap-accent-muted)', color: copyFeedback ? 'var(--yap-success)' : 'var(--yap-accent-hover)' }}>
               {copyFeedback ? 'Copied!' : 'Export as Script'}
             </button>
           )}
+          </div>
         </div>
         {copyError && <p role="alert">Could not copy. Check clipboard permissions and try again.</p>}
+        {backupFeedback && <p role="alert">{backupFeedback}</p>}
 
         {filtered.length === 0 ? (
           <div style={S.empty}>
@@ -358,13 +512,13 @@ export function App() {
                 onMouseEnter={(e) => { Object.assign(e.currentTarget.style, { background: 'var(--yap-bg-elevated)', borderColor: 'var(--yap-border)' }); }}
                 onMouseLeave={(e) => { Object.assign(e.currentTarget.style, { background: 'var(--yap-card-bg)', borderColor: 'var(--yap-border-subtle)' }); }}>
                 <div style={S.cardTop}>
-                  <button type="button" onClick={() => cycleStatus(book.id)} data-status-id={book.id}
+                  <button type="button" disabled={conflict || saving} onClick={() => { void cycleStatus(book.id); }} data-status-id={book.id}
                     aria-label={`Status: ${book.status.replace('-', ' ')}. Change status`} style={{
                     ...S.statusChip,
                     background: book.status === 'finished' ? 'var(--yap-success-bg)' : book.status === 'reading' ? 'var(--yap-info-bg)' : 'var(--yap-border-subtle)',
                     color: book.status === 'finished' ? 'var(--yap-success-fg)' : book.status === 'reading' ? 'var(--yap-info-fg)' : 'var(--yap-fg)',
                   }}>{book.status.replace('-', ' ')}</button>
-                  <button type="button" onClick={() => removeBook(book.id)} style={S.removeBtn}
+                  <button type="button" disabled={conflict || saving} onClick={() => { void removeBook(book.id); }} style={S.removeBtn}
                     aria-label={`Remove ${book.title}`} data-remove-id={book.id}><span aria-hidden="true">&times;</span></button>
                 </div>
                 <h2 style={{ ...S.cardTitle, ...(book.status === 'finished' ? { textDecoration: 'line-through', opacity: 0.6 } : {}) }}>
@@ -373,17 +527,17 @@ export function App() {
                 {book.totalPages && (
                   <div style={S.progress}>
                     {editingId === book.id ? (
-                      <form onSubmit={(e) => { e.preventDefault(); updatePages(book.id, parseInt(editPage) || 0, true); }}
+                      <form onSubmit={(e) => { e.preventDefault(); void updatePages(book.id, parseInt(editPage) || 0, true); }}
                         style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <input type="number" min={0} max={book.totalPages} value={editPage} autoFocus
                           aria-label={`Current page of ${book.title}`}
                           onChange={(e) => setEditPage(e.target.value)}
-                          onBlur={() => updatePages(book.id, parseInt(editPage) || 0)}
+                          onBlur={() => { void updatePages(book.id, parseInt(editPage) || 0); }}
                           style={{ ...S.input, width: 72, padding: '4px 8px', fontSize: 13 }} />
                         <span style={{ fontSize: 12, color: 'var(--yap-fg-muted)' }}>/ {book.totalPages} pages</span>
                       </form>
                     ) : (
-                      <button type="button" onClick={() => { setEditingId(book.id); setEditPage(String(book.currentPage ?? 0)); }}
+                      <button type="button" disabled={conflict || saving} onClick={() => { setEditingId(book.id); setEditPage(String(book.currentPage ?? 0)); }}
                         data-progress-id={book.id} aria-label={`${book.currentPage ?? 0} / ${book.totalPages} pages, update pages read`}
                         style={S.progressBtn} title="Click to update page count">
                         <span style={S.progressBar}>
