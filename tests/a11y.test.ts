@@ -61,8 +61,8 @@ describe('a11y (source-level)', () => {
     expect(src.includes('<h2 style={{ ...S.cardTitle')).toBe(true);
   });
   test("a blur never pulls focus back (only Enter/submit restores focus)", () => {
-    expect(/onBlur=\{\(\) => \{ void updatePages\(book\.id, parseInt\(editPage\) \|\| 0\); \}\}/.test(src)).toBe(true);
-    expect(/updatePages\(book\.id, parseInt\(editPage\) \|\| 0, true\)/.test(src)).toBe(true);
+    expect(/onBlur=\{\(\) => \{ void updatePages\(book\.id, parseWholeNumberInput\(editPage\)\); \}\}/.test(src)).toBe(true);
+    expect(/updatePages\(book\.id, parseWholeNumberInput\(editPage\), true\)/.test(src)).toBe(true);
     expect(/if \(restoreFocus\) \{\n\s+pendingFocus\.current/.test(src)).toBe(true);
   });
 });
