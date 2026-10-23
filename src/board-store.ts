@@ -71,7 +71,11 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
     request.onupgradeneeded = () => { request.result.createObjectStore(STORE); };
     request.onsuccess = () => {
       if (blocked) request.result.close();
-      else resolve(request.result);
+      else {
+        const db = request.result;
+        db.onversionchange = () => { db.close(); };
+        resolve(db);
+      }
     };
     request.onerror = () => reject(request.error ?? new Error('Could not open Reading List storage'));
     request.onblocked = () => {
