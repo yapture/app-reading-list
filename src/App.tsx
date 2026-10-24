@@ -49,7 +49,9 @@ export async function copyText(text: string): Promise<boolean> {
   } catch { return false; }
 }
 
-function parseScript(text: string): Partial<Book> {
+const PAGE_INPUT_ERROR = 'Use finite numbers of zero or more for pages and current.';
+
+export function parseReadingScript(text: string): Partial<Book> | null {
   const tags: string[] = [];
   const workspaces: string[] = [];
   let priority: string | null = null;
@@ -68,24 +70,32 @@ function parseScript(text: string): Partial<Book> {
 
   const metaMatch = text.match(/#\*\{([^}]+)\}/);
   if (metaMatch) {
-    const pagesM = metaMatch[1].match(/pages\s*:\s*(\d+)/);
-    const currentM = metaMatch[1].match(/current\s*:\s*(\d+)/);
-    if (pagesM) totalPages = parseInt(pagesM[1], 10);
-    if (currentM) currentPage = parseInt(currentM[1], 10);
+    const seen = new Set<string>();
+    for (const entry of metaMatch[1].split(',')) {
+      const [field, ...parts] = entry.split(':').map(value => value.trim());
+      if ((field !== 'pages' && field !== 'current') || seen.has(field)) continue;
+      seen.add(field);
+      const raw = parts.join(':');
+      const amount = Number(raw);
+      if (!raw || !Number.isFinite(amount) || amount < 0) return null;
+      if (field === 'pages') totalPages = amount;
+      else currentPage = amount;
+    }
   }
 
   const title = text.replace(/#[!@+^~$?]?\w[\w-]*/g, '').replace(/#\*\{[^}]*\}/g, '').replace(/\bdue:\S+/g, '').trim();
   return { title: title || text, tags, workspace: workspaces[0] ?? null, priority, totalPages, currentPage };
 }
 
-function bookToScript(b: Book): string {
+export function bookToScript(b: Book): string {
   let line = b.title;
   if (b.workspace) line += ` #@${b.workspace}`;
   if (b.priority) line += ` #!${b.priority}`;
   b.tags.forEach((t) => (line += ` #${t}`));
-  if (b.totalPages) {
-    const parts = [`pages:${b.totalPages}`];
-    if (b.currentPage) parts.push(`current:${b.currentPage}`);
+  if (b.totalPages !== null || b.currentPage !== null) {
+    const parts: string[] = [];
+    if (b.totalPages !== null) parts.push(`pages:${b.totalPages}`);
+    if (b.currentPage !== null) parts.push(`current:${b.currentPage}`);
     line += ` #*{${parts.join(',')}}`;
   }
   return line;
@@ -119,9 +129,32 @@ const EXAMPLES = [
 
 type Filter = 'all' | 'to-read' | 'reading' | 'finished';
 
+export function parseWholeNumberInput(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+}
+
+type BookControlAttribute = 'data-status-id' | 'data-remove-id' | 'data-progress-id';
+export interface BookFocusTarget {
+  id: string | null;
+  attribute: BookControlAttribute;
+  fallbacks: string[];
+}
+
+export function focusBookControl(target: BookFocusTarget, root: Pick<Document, 'querySelectorAll' | 'getElementById'> = document): void {
+  // Backup IDs are opaque strings, including characters with CSS syntax.
+  const control = target.id !== null
+    ? Array.from(root.querySelectorAll<HTMLElement>(`[${target.attribute}]`))
+      .find((el) => el.getAttribute(target.attribute) === target.id)
+    : undefined;
+  const el = control || target.fallbacks.map((id) => root.getElementById(id)).find(Boolean);
+  el?.focus();
+}
+
 export function App() {
   const [books, setBooks] = useState<Book[]>([]);
   const [input, setInput] = useState('');
+  const [inputError, setInputError] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPage, setEditPage] = useState('');
@@ -144,7 +177,7 @@ export function App() {
   const [copyError, setCopyError] = useState(false);
   const [status, setStatus] = useState('');
   const flip = useRef(false);
-  const pendingFocus = useRef<{ selector: string | null; fallbacks: string[] } | null>(null);
+  const pendingFocus = useRef<BookFocusTarget | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,22 +258,22 @@ export function App() {
     const p = pendingFocus.current;
     if (!p) return;
     pendingFocus.current = null;
-    const el = (p.selector && document.querySelector<HTMLElement>(p.selector))
-      || p.fallbacks.map((id) => document.getElementById(id)).find(Boolean);
-    el?.focus();
+    focusBookControl(p);
   }, [books]);
 
   const visible = filter === 'all' ? books : books.filter((b) => b.status === filter);
-  /* The control to focus when book `id` leaves the visible list: its neighbour's attribute, else the composer. */
-  const neighbourSelector = (id: string, attr: string) => {
+  /* The book to focus when `id` leaves the visible list: its neighbour, else the composer. */
+  const neighbourId = (id: string) => {
     const i = visible.findIndex((b) => b.id === id);
     const n = visible[i + 1] ?? visible[i - 1];
-    return n ? `[${attr}="${n.id}"]` : null;
+    return n ? n.id : null;
   };
 
   const addBook = useCallback(async (text: string) => {
     if (!text.trim()) return;
-    const parsed = parseScript(text);
+    const parsed = parseReadingScript(text);
+    if (!parsed) { setInputError(PAGE_INPUT_ERROR); announce(PAGE_INPUT_ERROR); return; }
+    setInputError('');
     const status: Book['status'] =
       parsed.currentPage && parsed.totalPages && parsed.currentPage >= parsed.totalPages
         ? 'finished' : parsed.currentPage ? 'reading' : 'to-read';
@@ -261,7 +294,8 @@ export function App() {
     if (!cur) return;
     const next = order[(order.indexOf(cur.status) + 1) % 3];
     pendingFocus.current = {
-      selector: filter !== 'all' && next !== filter ? neighbourSelector(id, 'data-status-id') : `[data-status-id="${id}"]`,
+      id: filter !== 'all' && next !== filter ? neighbourId(id) : id,
+      attribute: 'data-status-id',
       fallbacks: ['book-input'],
     };
     if (!(await persist(books.map((b) => b.id !== id ? b : { ...b, status: next })))) return;
@@ -270,7 +304,7 @@ export function App() {
 
   const removeBook = useCallback(async (id: string) => {
     const gone = books.find((b) => b.id === id);
-    pendingFocus.current = { selector: neighbourSelector(id, 'data-remove-id'), fallbacks: ['book-input'] };
+    pendingFocus.current = { id: neighbourId(id), attribute: 'data-remove-id', fallbacks: ['book-input'] };
     if (!(await persist(books.filter((b) => b.id !== id)))) return;
     if (gone) announce(`Removed ${gone.title}`);
   }, [books, persist, announce, visible]);
@@ -283,7 +317,8 @@ export function App() {
     const next: Book['status'] = cur.totalPages && cp >= cur.totalPages ? 'finished' : cp > 0 ? 'reading' : 'to-read';
     if (restoreFocus) {
       pendingFocus.current = {
-        selector: filter !== 'all' && next !== filter ? neighbourSelector(id, 'data-status-id') : `[data-progress-id="${id}"]`,
+        id: filter !== 'all' && next !== filter ? neighbourId(id) : id,
+        attribute: filter !== 'all' && next !== filter ? 'data-status-id' : 'data-progress-id',
         fallbacks: ['book-input'],
       };
     }
@@ -454,7 +489,7 @@ export function App() {
               <label htmlFor="goal-input" style={{ fontSize: 13, color: 'var(--yap-fg-muted)' }}>Target:</label>
               <input id="goal-input" type="number" min={1} max={999} value={goal} disabled={conflict || saving}
                 onChange={(e) => {
-                  const next = Math.min(999, Math.max(1, parseInt(e.target.value, 10) || 1));
+                  const next = Math.min(999, Math.max(1, parseWholeNumberInput(e.target.value) || 1));
                   void persist(books, next);
                 }}
                 style={{ ...S.input, width: 64, padding: '6px 10px', fontSize: 14, textAlign: 'center' }} />
@@ -465,10 +500,12 @@ export function App() {
 
         <form onSubmit={handleSubmit} className="rl-form" style={S.form}>
           <label htmlFor="book-input" className="sr-only">Add a book</label>
-          <input id="book-input" type="text" value={input} onChange={(e) => setInput(e.target.value)}
+          <input id="book-input" type="text" value={input} onChange={(e) => { setInput(e.target.value); setInputError(''); }}
+            aria-invalid={!!inputError} aria-describedby={inputError ? 'book-input-error' : undefined}
             placeholder="Add a book — try: Title #@genre #!priority #*{pages:300,current:50}" style={S.input} />
           <button type="submit" disabled={conflict || saving || !input.trim()} style={S.addBtn}>Add</button>
         </form>
+        {inputError && <p id="book-input-error" role="alert">{inputError}</p>}
 
         <div className="rl-examples" style={S.examples}>
           {EXAMPLES.map((ex) => (
@@ -524,15 +561,15 @@ export function App() {
                 <h2 style={{ ...S.cardTitle, ...(book.status === 'finished' ? { textDecoration: 'line-through', opacity: 0.6 } : {}) }}>
                   {book.title}
                 </h2>
-                {book.totalPages && (
+                {book.totalPages !== null && book.totalPages > 0 && (
                   <div style={S.progress}>
                     {editingId === book.id ? (
-                      <form onSubmit={(e) => { e.preventDefault(); void updatePages(book.id, parseInt(editPage) || 0, true); }}
+                      <form onSubmit={(e) => { e.preventDefault(); void updatePages(book.id, parseWholeNumberInput(editPage), true); }}
                         style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <input type="number" min={0} max={book.totalPages} value={editPage} autoFocus
                           aria-label={`Current page of ${book.title}`}
                           onChange={(e) => setEditPage(e.target.value)}
-                          onBlur={() => { void updatePages(book.id, parseInt(editPage) || 0); }}
+                          onBlur={() => { void updatePages(book.id, parseWholeNumberInput(editPage)); }}
                           style={{ ...S.input, width: 72, padding: '4px 8px', fontSize: 13 }} />
                         <span style={{ fontSize: 12, color: 'var(--yap-fg-muted)' }}>/ {book.totalPages} pages</span>
                       </form>
@@ -564,9 +601,7 @@ export function App() {
       <footer style={S.footer}>
         <span>Built on{' '}<a href="https://yapture.com" style={S.footerLink}>Yapture</a></span>
         <span>&middot;</span>
-        <a href="https://yapture.com/docs/script" style={S.footerLink}>Script docs</a>
-        <span>&middot;</span>
-        <a href="https://yapture.com/docs/api" style={S.footerLink}>API reference</a>
+        <a href="https://docs.yapture.com/" style={S.footerLink}>Developer docs</a>
       </footer>
     </div>
   );
